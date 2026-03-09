@@ -1,0 +1,11 @@
+spotlight:
+  name: Spotlight Movie
+  description: Search for a movie by title and spotlight the top result on the display.
+  fields:
+    query:
+      name: Movie Title
+      description: The movie title to search for (e.g., "Interstellar").
+      required: true
+      example: "Interstellar"
+      selector:
+        text:

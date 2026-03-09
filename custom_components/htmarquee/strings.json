@@ -1,0 +1,37 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to htMarquee",
+        "description": "Enter the hostname or IP address of your htMarquee device.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "use_ssl": "Use HTTPS"
+        }
+      },
+      "auth": {
+        "title": "Authentication",
+        "description": "Enter your htMarquee admin credentials.",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        }
+      },
+      "auth_pin": {
+        "title": "Enter PIN",
+        "description": "Enter your htMarquee admin PIN.",
+        "data": {
+          "password": "PIN"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to htMarquee",
+      "invalid_auth": "Invalid credentials"
+    },
+    "abort": {
+      "already_configured": "This htMarquee device is already configured"
+    }
+  }
+}
