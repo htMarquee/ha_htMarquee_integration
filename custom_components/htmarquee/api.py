@@ -38,8 +38,13 @@ class HtMarqueeApi:
         self._owns_session = session is None
         scheme = "https" if use_ssl else "http"
         self._base_url = f"{scheme}://{host}:{port}"
-        # Self-signed cert support
-        self._ssl_context: ssl.SSLContext | bool = False if use_ssl else None
+        # Self-signed cert support — explicit context is more reliable than ssl=False
+        if use_ssl:
+            self._ssl_context: ssl.SSLContext | None = ssl.create_default_context()
+            self._ssl_context.check_hostname = False
+            self._ssl_context.verify_mode = ssl.CERT_NONE
+        else:
+            self._ssl_context = None
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:

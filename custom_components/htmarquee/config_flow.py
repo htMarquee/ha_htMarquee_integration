@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 import voluptuous as vol
 
@@ -13,6 +14,34 @@ from .api import HtMarqueeApi, HtMarqueeApiError, HtMarqueeAuthError
 from .const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_TOKEN, CONF_USE_SSL, CONF_USERNAME, DEFAULT_PORT, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _parse_host_input(host_input: str) -> tuple[str, int | None, bool | None]:
+    """Extract hostname, port, and ssl preference from user input.
+
+    Handles bare hostnames/IPs, and full URLs like https://myhost:443/path.
+    Returns (hostname, port_or_None, use_ssl_or_None).
+    """
+    host_input = host_input.strip().rstrip("/")
+
+    # If it looks like a URL (has a scheme), parse it
+    if "://" in host_input:
+        parsed = urlparse(host_input)
+        hostname = parsed.hostname or host_input
+        port = parsed.port  # None if not specified
+        use_ssl = True if parsed.scheme == "https" else (False if parsed.scheme == "http" else None)
+        return hostname, port, use_ssl
+
+    # Handle host:port without a scheme (e.g. "myhost:8443")
+    if ":" in host_input:
+        parts = host_input.rsplit(":", 1)
+        try:
+            port = int(parts[1])
+            return parts[0], port, None
+        except ValueError:
+            pass
+
+    return host_input, None, None
 
 STEP_USER_SCHEMA = vol.Schema(
     {
@@ -54,9 +83,10 @@ class HtMarqueeConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            self._host = user_input[CONF_HOST]
-            self._port = user_input[CONF_PORT]
-            self._use_ssl = user_input[CONF_USE_SSL]
+            hostname, parsed_port, parsed_ssl = _parse_host_input(user_input[CONF_HOST])
+            self._host = hostname
+            self._port = parsed_port if parsed_port is not None else user_input[CONF_PORT]
+            self._use_ssl = parsed_ssl if parsed_ssl is not None else user_input[CONF_USE_SSL]
 
             api = HtMarqueeApi(self._host, self._port, self._use_ssl)
             try:
