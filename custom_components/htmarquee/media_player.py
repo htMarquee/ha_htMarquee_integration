@@ -38,13 +38,6 @@ class HtMarqueeMediaPlayer(CoordinatorEntity[HtMarqueeCoordinator], MediaPlayerE
     _attr_has_entity_name = True
     _attr_name = None  # Use device name
     _attr_media_content_type = MediaType.MOVIE
-    _attr_supported_features = (
-        MediaPlayerEntityFeature.PAUSE
-        | MediaPlayerEntityFeature.PLAY
-        | MediaPlayerEntityFeature.NEXT_TRACK
-        | MediaPlayerEntityFeature.PREVIOUS_TRACK
-        | MediaPlayerEntityFeature.SELECT_SOURCE
-    )
 
     def __init__(
         self,
@@ -63,6 +56,42 @@ class HtMarqueeMediaPlayer(CoordinatorEntity[HtMarqueeCoordinator], MediaPlayerE
         }
 
     @property
+    def _is_external_source(self) -> bool:
+        """Return True when an external app (e.g. Plex) is driving htMarquee."""
+        if not self.coordinator.data:
+            return False
+        label = self.coordinator.data.get("state_label", "")
+        return label.startswith("Playing on ")
+
+    @property
+    def _external_source_name(self) -> str | None:
+        """Return the external source name (e.g. 'Plex'), or None."""
+        if not self.coordinator.data:
+            return None
+        label = self.coordinator.data.get("state_label", "")
+        if label.startswith("Playing on "):
+            return label[len("Playing on "):]
+        return None
+
+    @property
+    def supported_features(self) -> MediaPlayerEntityFeature:
+        """Return supported features, hiding playback controls during external source."""
+        if self._is_external_source:
+            return MediaPlayerEntityFeature.SELECT_SOURCE
+        return (
+            MediaPlayerEntityFeature.PAUSE
+            | MediaPlayerEntityFeature.PLAY
+            | MediaPlayerEntityFeature.NEXT_TRACK
+            | MediaPlayerEntityFeature.PREVIOUS_TRACK
+            | MediaPlayerEntityFeature.SELECT_SOURCE
+        )
+
+    @property
+    def app_name(self) -> str | None:
+        """Return the external app name when one is controlling htMarquee."""
+        return self._external_source_name
+
+    @property
     def state(self) -> MediaPlayerState | None:
         """Return current state."""
         if not self.coordinator.data:
@@ -71,6 +100,8 @@ class HtMarqueeMediaPlayer(CoordinatorEntity[HtMarqueeCoordinator], MediaPlayerE
         slideshow = self.coordinator.data.get("slideshow", {})
         is_paused = slideshow.get("is_paused", False)
 
+        if self._is_external_source:
+            return MediaPlayerState.ON
         if htm_state == "IDLE" and is_paused:
             return MediaPlayerState.PAUSED
         return MediaPlayerState(STATE_MAP.get(htm_state, "off"))

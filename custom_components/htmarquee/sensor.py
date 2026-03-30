@@ -111,6 +111,8 @@ class HtMarqueeMovieSensor(HtMarqueeBaseSensor):
         attrs["aspect_ratio"] = movie.get("aspect_ratio")
         poster = movie.get("poster_url", "")
         attrs["poster_url"] = self.coordinator.api.get_poster_url(poster) if poster else None
+        if self.coordinator.data:
+            attrs["state_label"] = self.coordinator.data.get("state_label")
         return attrs
 
     @property

@@ -91,7 +91,8 @@ class HtMarqueeConfigFlow(ConfigFlow, domain=DOMAIN):
             api = HtMarqueeApi(self._host, self._port, self._use_ssl)
             try:
                 await api.async_get_health()
-            except HtMarqueeApiError:
+            except HtMarqueeApiError as err:
+                _LOGGER.error("Failed to connect to htMarquee at %s:%s (ssl=%s): %s", self._host, self._port, self._use_ssl, err)
                 errors["base"] = "cannot_connect"
             else:
                 # Check if auth is required
