@@ -10,11 +10,12 @@ Control your htMarquee display as a standard Home Assistant media player:
 - **Skip** forward or back through movies
 - **Select playlist** as the media source (or use Auto/Upcoming)
 - **Movie poster** shown as the media player thumbnail
-- **Rich attributes**: TMDB ID, genres, rating, runtime, RT score, Metacritic score, tagline, phase info
+- **External source awareness** — when an external app (e.g. Plex) is driving htMarquee, playback controls are automatically hidden and the app name is exposed via `app_name`
+- **Rich attributes**: TMDB ID, genres, rating, runtime, vote average, RT score, Metacritic score, tagline, phase, current index, total items, state label
 
 ### Sensors
-- **Current Movie** — title with metadata attributes (year, genres, ratings, poster URL, aspect ratio)
-- **Slideshow Phase** — current phase (POSTER_REVEAL, TRAILER, POSTER_HOLD, TRANSITION, INTERSTITIAL) with duration and transition effect
+- **Current Movie** — title with metadata attributes (year, genres, rating, vote average, runtime, RT score, Metacritic score, tagline, aspect ratio, poster URL, state label)
+- **Slideshow Phase** — current phase (POSTER_REVEAL, TRAILER, POSTER_HOLD, TRANSITION, INTERSTITIAL) with phase duration, transition effect, and paused state
 
 ### Buttons
 - **Play Trailer** — trigger the current movie's trailer on the display
@@ -31,7 +32,7 @@ Control your htMarquee display as a standard Home Assistant media player:
 ### HACS (Recommended)
 1. Open HACS in Home Assistant
 2. Click the three dots menu and select **Custom repositories**
-3. Add `https://github.com/htMarquee/homeassistant` with category **Integration**
+3. Add `https://github.com/htMarquee/ha_htMarquee_integration` with category **Integration**
 4. Search for "htMarquee" and install
 5. Restart Home Assistant
 
@@ -43,7 +44,7 @@ Control your htMarquee display as a standard Home Assistant media player:
 
 1. Go to **Settings > Devices & Services > Add Integration**
 2. Search for **htMarquee**
-3. Enter your device's hostname (default: `htmarquee.local`) and port (default: `443`)
+3. Enter your device's hostname or full URL (e.g. `htmarquee.local`, `https://10.0.1.50:8443`) and port (default: `443`)
 4. If authentication is enabled, enter your credentials on the next step
 
 The integration auto-detects whether your htMarquee instance requires authentication and supports both password and PIN auth modes.
