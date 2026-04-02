@@ -11,6 +11,8 @@ CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
 
 DEFAULT_PORT = 443
+TIER_PREMIERE = "premiere"
+TIER_MATINEE = "matinee"
 DEFAULT_SCAN_INTERVAL = 10  # seconds
 PLAYLIST_SCAN_INTERVAL = 60  # seconds
 HARDWARE_SCAN_INTERVAL = 30  # seconds
@@ -23,4 +25,4 @@ STATE_MAP = {
     "OFFLINE": "off",
 }
 
-PLATFORMS = ["media_player", "sensor", "switch", "button", "light"]
+PLATFORMS = ["media_player", "sensor", "button", "light"]

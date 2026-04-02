@@ -158,6 +158,8 @@ class HtMarqueeConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_PORT: self._port,
                         CONF_USE_SSL: self._use_ssl,
                         CONF_TOKEN: token,
+                        CONF_USERNAME: username,
+                        CONF_PASSWORD: user_input[CONF_PASSWORD],
                     },
                 )
             finally:

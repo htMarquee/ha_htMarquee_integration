@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import ssl
 from typing import Any
@@ -19,6 +20,10 @@ class HtMarqueeAuthError(HtMarqueeApiError):
     """Authentication error."""
 
 
+class HtMarqueePremiumRequired(HtMarqueeApiError):
+    """Raised when a Premiere-tier feature is called on a Matinee subscription."""
+
+
 class HtMarqueeApi:
     """Async API client for htMarquee."""
 
@@ -28,14 +33,19 @@ class HtMarqueeApi:
         port: int,
         use_ssl: bool = True,
         token: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
         session: aiohttp.ClientSession | None = None,
     ) -> None:
         self._host = host
         self._port = port
         self._use_ssl = use_ssl
         self._token = token
+        self._username = username
+        self._password = password
         self._session = session
         self._owns_session = session is None
+        self._relogin_lock = asyncio.Lock()
         scheme = "https" if use_ssl else "http"
         self._base_url = f"{scheme}://{host}:{port}"
         # Self-signed cert support — explicit context is more reliable than ssl=False
@@ -59,26 +69,64 @@ class HtMarqueeApi:
             headers["Authorization"] = f"Bearer {self._token}"
         return headers
 
-    async def _request(
+    async def _do_request(
         self,
         method: str,
         path: str,
         json: dict | None = None,
+        params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        """Execute a single HTTP request with no retry logic."""
         session = await self._ensure_session()
         url = f"{self._base_url}{path}"
         try:
             async with session.request(
-                method, url, headers=self._headers(), json=json, timeout=aiohttp.ClientTimeout(total=15)
+                method, url, headers=self._headers(), json=json, params=params,
+                timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
                 if resp.status == 401:
                     raise HtMarqueeAuthError("Authentication failed")
+                if resp.status == 403:
+                    try:
+                        body = await resp.json()
+                    except Exception:
+                        raise HtMarqueeApiError("Forbidden (status 403)")
+                    if body.get("detail") == "Premiere feature required":
+                        raise HtMarqueePremiumRequired(body["detail"])
+                    raise HtMarqueeApiError(f"Forbidden: {body}")
                 if resp.status >= 400:
                     text = await resp.text()
                     raise HtMarqueeApiError(f"API error {resp.status}: {text[:200]}")
                 return await resp.json()
         except aiohttp.ClientError as err:
             raise HtMarqueeApiError(f"Connection error: {err}") from err
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        json: dict | None = None,
+        params: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Execute a request with automatic token refresh on 401."""
+        try:
+            return await self._do_request(method, path, json, params)
+        except HtMarqueeAuthError:
+            if not self._username or not self._password:
+                raise
+            # Re-login under lock; concurrent callers wait then retry
+            stale_token = self._token
+            async with self._relogin_lock:
+                if self._token == stale_token:
+                    try:
+                        await self.async_login(self._username, self._password)
+                        _LOGGER.info("htMarquee token refreshed after 401")
+                    except (HtMarqueeAuthError, HtMarqueeApiError) as login_err:
+                        raise HtMarqueeAuthError(
+                            f"Authentication failed and re-login unsuccessful: {login_err}"
+                        ) from login_err
+            # Retry once with fresh token — no further retry on failure
+            return await self._do_request(method, path, json, params)
 
     async def close(self) -> None:
         if self._owns_session and self._session and not self._session.closed:
@@ -124,6 +172,12 @@ class HtMarqueeApi:
     async def async_get_status(self) -> dict[str, Any]:
         return await self._request("GET", "/api/status")
 
+    async def async_get_license_status(self) -> dict[str, Any]:
+        return await self._request("GET", "/api/license/status")
+
+    async def async_get_system_update_status(self) -> dict[str, Any]:
+        return await self._request("GET", "/api/system/update/status")
+
     # ── Control ─────────────────────────────────────────────────────────
 
     async def async_skip(self) -> dict[str, Any]:
@@ -148,23 +202,7 @@ class HtMarqueeApi:
 
     async def async_search_movies(self, query: str) -> dict[str, Any]:
         """Search for movies by title. Returns {results: [...], ...}."""
-        session = await self._ensure_session()
-        url = f"{self._base_url}/api/movie/search"
-        try:
-            async with session.get(
-                url,
-                headers=self._headers(),
-                params={"q": query},
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                if resp.status == 401:
-                    raise HtMarqueeAuthError("Authentication failed")
-                if resp.status >= 400:
-                    text = await resp.text()
-                    raise HtMarqueeApiError(f"Search error {resp.status}: {text[:200]}")
-                return await resp.json()
-        except aiohttp.ClientError as err:
-            raise HtMarqueeApiError(f"Connection error: {err}") from err
+        return await self._request("GET", "/api/movie/search", params={"q": query})
 
     # ── Playlists ───────────────────────────────────────────────────────
 

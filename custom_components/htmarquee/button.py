@@ -4,19 +4,14 @@ from __future__ import annotations
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import HtMarqueeConfigEntry
+from .api import HtMarqueePremiumRequired
 from .const import DOMAIN, MANUFACTURER
 from .coordinator import HtMarqueeCoordinator
-
-DEVICE_INFO = {
-    "identifiers": {(DOMAIN, "")},  # placeholder, set in __init__
-    "name": "htMarquee",
-    "manufacturer": MANUFACTURER,
-    "model": "Smart Movie Poster Display",
-}
 
 
 async def async_setup_entry(
@@ -62,8 +57,17 @@ class HtMarqueePlayTrailerButton(_HtMarqueeButton):
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_play_trailer"
 
+    @property
+    def available(self) -> bool:
+        if not self.coordinator.is_premiere:
+            return False
+        return super().available
+
     async def async_press(self) -> None:
-        await self.coordinator.api.async_play_trailer()
+        try:
+            await self.coordinator.api.async_play_trailer()
+        except HtMarqueePremiumRequired as err:
+            raise HomeAssistantError("Play Trailer requires htMarquee Premiere tier") from err
         await self.coordinator.async_request_refresh()
 
 
@@ -79,10 +83,15 @@ class HtMarqueeTvOnButton(_HtMarqueeButton):
 
     @property
     def available(self) -> bool:
+        if not self.coordinator.is_premiere:
+            return False
         return super().available and self.coordinator.hardware.get("cec_enabled", False)
 
     async def async_press(self) -> None:
-        await self.coordinator.api.async_cec_power("on")
+        try:
+            await self.coordinator.api.async_cec_power("on")
+        except HtMarqueePremiumRequired as err:
+            raise HomeAssistantError("CEC control requires htMarquee Premiere tier") from err
         await self.coordinator.async_request_refresh()
 
 
@@ -98,8 +107,13 @@ class HtMarqueeTvOffButton(_HtMarqueeButton):
 
     @property
     def available(self) -> bool:
+        if not self.coordinator.is_premiere:
+            return False
         return super().available and self.coordinator.hardware.get("cec_enabled", False)
 
     async def async_press(self) -> None:
-        await self.coordinator.api.async_cec_power("off")
+        try:
+            await self.coordinator.api.async_cec_power("off")
+        except HtMarqueePremiumRequired as err:
+            raise HomeAssistantError("CEC control requires htMarquee Premiere tier") from err
         await self.coordinator.async_request_refresh()

@@ -11,10 +11,12 @@ from homeassistant.components.light import (
     LightEntity,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import HtMarqueeConfigEntry
+from .api import HtMarqueePremiumRequired
 from .const import DOMAIN, MANUFACTURER
 from .coordinator import HtMarqueeCoordinator
 
@@ -58,6 +60,8 @@ class HtMarqueeLedLight(CoordinatorEntity[HtMarqueeCoordinator], LightEntity):
 
     @property
     def available(self) -> bool:
+        if not self.coordinator.is_premiere:
+            return False
         return (
             super().available
             and self.coordinator.hardware.get("led_enabled", False)
@@ -81,18 +85,24 @@ class HtMarqueeLedLight(CoordinatorEntity[HtMarqueeCoordinator], LightEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn on LED strip with optional brightness and color."""
-        await self.coordinator.api.async_led_power(True)
+        try:
+            await self.coordinator.api.async_led_power(True)
 
-        if ATTR_BRIGHTNESS in kwargs:
-            await self.coordinator.api.async_led_brightness(kwargs[ATTR_BRIGHTNESS])
+            if ATTR_BRIGHTNESS in kwargs:
+                await self.coordinator.api.async_led_brightness(kwargs[ATTR_BRIGHTNESS])
 
-        if ATTR_RGB_COLOR in kwargs:
-            r, g, b = kwargs[ATTR_RGB_COLOR]
-            await self.coordinator.api.async_led_color(r, g, b)
+            if ATTR_RGB_COLOR in kwargs:
+                r, g, b = kwargs[ATTR_RGB_COLOR]
+                await self.coordinator.api.async_led_color(r, g, b)
+        except HtMarqueePremiumRequired as err:
+            raise HomeAssistantError("LED control requires htMarquee Premiere tier") from err
 
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off LED strip."""
-        await self.coordinator.api.async_led_power(False)
+        try:
+            await self.coordinator.api.async_led_power(False)
+        except HtMarqueePremiumRequired as err:
+            raise HomeAssistantError("LED control requires htMarquee Premiere tier") from err
         await self.coordinator.async_request_refresh()

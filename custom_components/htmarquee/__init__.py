@@ -10,7 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 
 from .api import HtMarqueeApi, HtMarqueeApiError
-from .const import CONF_HOST, CONF_PORT, CONF_TOKEN, CONF_USE_SSL, DOMAIN, PLATFORMS
+from .const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_TOKEN, CONF_USE_SSL, CONF_USERNAME, DOMAIN, PLATFORMS
 from .coordinator import HtMarqueeCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -32,9 +32,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: HtMarqueeConfigEntry) ->
         port=entry.data[CONF_PORT],
         use_ssl=entry.data.get(CONF_USE_SSL, True),
         token=entry.data.get(CONF_TOKEN),
+        username=entry.data.get(CONF_USERNAME),
+        password=entry.data.get(CONF_PASSWORD),
     )
 
     coordinator = HtMarqueeCoordinator(hass, api)
+
+    # Fetch initial license tier and device version before first status poll
+    try:
+        license_info = await api.async_get_license_status()
+        coordinator.tier = license_info.get("tier", coordinator.tier)
+    except HtMarqueeApiError:
+        _LOGGER.debug("Could not fetch license status; tier will be read from /api/status")
+
+    try:
+        update_status = await api.async_get_system_update_status()
+        coordinator.device_sw_version = update_status.get("version")
+    except HtMarqueeApiError:
+        _LOGGER.debug("Could not fetch system version")
+
     await coordinator.async_config_entry_first_refresh()
 
     entry.runtime_data = coordinator

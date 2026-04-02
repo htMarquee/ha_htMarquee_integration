@@ -47,12 +47,16 @@ class HtMarqueeMediaPlayer(CoordinatorEntity[HtMarqueeCoordinator], MediaPlayerE
         super().__init__(coordinator)
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_media_player"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.entry_id)},
+
+    @property
+    def device_info(self) -> dict[str, Any]:
+        """Return device info with sw_version from coordinator."""
+        return {
+            "identifiers": {(DOMAIN, self._entry.entry_id)},
             "name": "htMarquee",
             "manufacturer": MANUFACTURER,
             "model": "Smart Movie Poster Display",
-            "sw_version": "1.0",
+            "sw_version": self.coordinator.device_sw_version,
         }
 
     @property
