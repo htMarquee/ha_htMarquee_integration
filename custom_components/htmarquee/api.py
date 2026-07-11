@@ -91,8 +91,13 @@ class HtMarqueeApi:
                         body = await resp.json()
                     except Exception:
                         raise HtMarqueeApiError("Forbidden (status 403)")
-                    if body.get("detail") == "Premiere feature required":
-                        raise HtMarqueePremiumRequired(body["detail"])
+                    # The device's @require_tier gate returns detail as a dict:
+                    # {"error": "premiere_required", "message": ..., "feature": ..., "current_tier": ...}
+                    detail = body.get("detail")
+                    if isinstance(detail, dict) and detail.get("error") == "premiere_required":
+                        raise HtMarqueePremiumRequired(
+                            detail.get("message", "This feature requires a Premiere license.")
+                        )
                     raise HtMarqueeApiError(f"Forbidden: {body}")
                 if resp.status >= 400:
                     text = await resp.text()
@@ -175,8 +180,9 @@ class HtMarqueeApi:
     async def async_get_license_status(self) -> dict[str, Any]:
         return await self._request("GET", "/api/license/status")
 
-    async def async_get_system_update_status(self) -> dict[str, Any]:
-        return await self._request("GET", "/api/system/update/status")
+    async def async_get_system_version(self) -> dict[str, Any]:
+        """Fetch device version/update state (GET /api/system/version)."""
+        return await self._request("GET", "/api/system/version")
 
     # ── Control ─────────────────────────────────────────────────────────
 

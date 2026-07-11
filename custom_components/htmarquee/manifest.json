@@ -5,9 +5,9 @@
     "@htmarquee-owner"
   ],
   "config_flow": true,
-  "documentation": "https://github.com/htmarquee/homeassistant",
+  "documentation": "https://github.com/htMarquee/ha_htMarquee_integration",
   "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/htmarquee/homeassistant/issues",
+  "issue_tracker": "https://github.com/htMarquee/ha_htMarquee_integration/issues",
   "requirements": [],
   "version": "1.0.3",
   "zeroconf": []

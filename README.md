@@ -1,8 +1,10 @@
 # htMarquee for Home Assistant
 
-Home Assistant integration for [htMarquee](https://htmarquee.com), a smart movie poster display system for home theater lobbies.
+Home Assistant integration for [htMarquee](https://htmarquee.com), a smart movie poster display for home theater lobbies. It communicates with your htMarquee device over its local REST API.
 
 ## Features
+
+> **Premiere tier required.** The Home Assistant integration and the REST API it uses are htMarquee Premiere features. The Play Trailer button, the TV (HDMI-CEC) buttons, and the LED Strip light are Premiere-gated and appear unavailable on a Matinee (free) device. See [Requirements](#requirements).
 
 ### Media Player
 Control your htMarquee display as a standard Home Assistant media player:
@@ -99,4 +101,5 @@ automation:
 ## Requirements
 
 - Home Assistant 2024.1.0 or newer
-- htMarquee device accessible on your local network
+- An htMarquee device reachable on your local network. It defaults to `htmarquee.local`, but the mDNS hostname is user-configurable on the device (e.g. `htmarquee-livingroom.local`), so enter whatever name/IP your device uses.
+- **htMarquee Premiere tier** — the Home Assistant integration and REST API are Premiere features. The media-player and sensor entities reflect whatever the device reports; the Play Trailer button, TV (HDMI-CEC) buttons, and LED Strip light require Premiere (and the TV/LED entities also require CEC/LED hardware enabled on the device).

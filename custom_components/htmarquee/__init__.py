@@ -46,8 +46,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: HtMarqueeConfigEntry) ->
         _LOGGER.debug("Could not fetch license status; tier will be read from /api/status")
 
     try:
-        update_status = await api.async_get_system_update_status()
-        coordinator.device_sw_version = update_status.get("version")
+        version_info = await api.async_get_system_version()
+        coordinator.device_sw_version = version_info.get("version")
     except HtMarqueeApiError:
         _LOGGER.debug("Could not fetch system version")
 

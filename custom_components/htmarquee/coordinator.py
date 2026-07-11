@@ -70,8 +70,8 @@ class HtMarqueeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except HtMarqueeApiError:
                 _LOGGER.debug("Failed to refresh hardware status")
             try:
-                update_info = await self.api.async_get_system_update_status()
-                self.device_sw_version = update_info.get("version")
+                version_info = await self.api.async_get_system_version()
+                self.device_sw_version = version_info.get("version")
             except HtMarqueeApiError:
                 _LOGGER.debug("Failed to refresh device version")
 
