@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlparse
 
@@ -178,4 +179,69 @@ class HtMarqueeConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Handle PIN authentication (delegates to async_step_auth)."""
         return await self.async_step_auth(user_input)
+
+    async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
+        """Credentials stopped working — ask for them again.
+
+        Reached when the coordinator raises ConfigEntryAuthFailed, which
+        happens after the device's admin password or PIN is changed (that
+        invalidates every existing token). Without this the integration would
+        just retry a dead credential forever.
+        """
+        self._host = entry_data[CONF_HOST]
+        self._port = entry_data[CONF_PORT]
+        self._use_ssl = entry_data.get(CONF_USE_SSL, True)
+
+        # Re-probe rather than assume: the device can be switched between
+        # password and PIN mode, and that is one reason the old token died.
+        api = HtMarqueeApi(self._host, self._port, self._use_ssl)
+        try:
+            auth_status = await api.async_get_auth_status()
+            self._auth_mode = auth_status.get("auth_mode", "password")
+        except HtMarqueeApiError:
+            self._auth_mode = "password"
+        finally:
+            await api.close()
+
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Collect and verify replacement credentials."""
+        errors: dict[str, str] = {}
+        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        assert entry is not None
+
+        if user_input is not None:
+            username = user_input.get(CONF_USERNAME, "admin")
+            api = HtMarqueeApi(self._host, self._port, self._use_ssl)
+            try:
+                token = await api.async_login(username, user_input[CONF_PASSWORD])
+            except HtMarqueeAuthError:
+                errors["base"] = "invalid_auth"
+            except HtMarqueeApiError:
+                errors["base"] = "cannot_connect"
+            else:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data={
+                        **entry.data,
+                        CONF_TOKEN: token,
+                        CONF_USERNAME: username,
+                        CONF_PASSWORD: user_input[CONF_PASSWORD],
+                    },
+                )
+            finally:
+                await api.close()
+
+        schema = (
+            STEP_AUTH_PIN_SCHEMA if self._auth_mode == "pin" else STEP_AUTH_PASSWORD_SCHEMA
+        )
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={"host": self._host},
+        )
 

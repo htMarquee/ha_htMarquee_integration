@@ -9,3 +9,81 @@ spotlight:
       example: "Interstellar"
       selector:
         text:
+    device_id:
+      name: Device
+      description: Which htMarquee to use. Only needed if you have more than one.
+      required: false
+      selector:
+        device:
+          integration: htmarquee
+
+led_effect:
+  name: Set LED Effect
+  description: >-
+    Set the LED strip's effect, speed and palette in one go. Each of those
+    restarts the running effect on the device, so doing it in a single call
+    means one visible cut instead of three.
+  target:
+    entity:
+      integration: htmarquee
+      domain: light
+  fields:
+    effect:
+      name: Effect
+      description: Effect name, as shown in the light's effect list.
+      required: true
+      example: "Car Chase"
+      selector:
+        select:
+          custom_value: true
+          options:
+            - "Breathing"
+            - "Car Chase"
+            - "Chase Rainbow"
+            - "Color Loop"
+            - "Corner Flames"
+            - "Cross"
+            - "Cross - Continuous"
+            - "Cross - Six Arms"
+            - "Electron"
+            - "Gradient"
+            - "Marquee - Alternating"
+            - "Marquee - Grand Chase"
+            - "Marquee - Tail"
+            - "Marquee - Tight"
+            - "Now Showing Pulse"
+            - "Paparazzi"
+            - "Poster Glow"
+            - "Rainbow"
+            - "Red Carpet"
+            - "Silver Screen"
+            - "Solid"
+            - "Spotlight"
+            - "Spotlight - Dual"
+            - "Spotlight - Premiere Night"
+            - "Spotlight - Quad"
+            - "Wipe"
+    speed:
+      name: Speed
+      description: >-
+        0-255. The scale is exponential: the middle of the range is each
+        effect's natural tempo, the top is roughly seven times faster and the
+        bottom roughly an eighth. Leave unset to keep the current speed.
+      required: false
+      example: 128
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: slider
+    palette:
+      name: Palette
+      description: >-
+        A built-in palette (default, fire, ocean, forest, warm_white, sunset,
+        party, lava, cloud, cinema), the exact name of a custom palette, or
+        "Color Picker" to use the strip's picked colour instead. Effects with
+        fixed colours ignore this.
+      required: false
+      example: "cinema"
+      selector:
+        text:

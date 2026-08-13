@@ -24,6 +24,14 @@
         "data": {
           "password": "PIN"
         }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate htMarquee",
+        "description": "htMarquee at {host} rejected the stored credentials. This normally means the admin password or PIN was changed on the device. Enter the current one to reconnect.",
+        "data": {
+          "username": "Username",
+          "password": "Password or PIN"
+        }
       }
     },
     "error": {
@@ -31,7 +39,8 @@
       "invalid_auth": "Invalid credentials"
     },
     "abort": {
-      "already_configured": "This htMarquee device is already configured"
+      "already_configured": "This htMarquee device is already configured",
+      "reauth_successful": "htMarquee reconnected successfully"
     }
   }
 }

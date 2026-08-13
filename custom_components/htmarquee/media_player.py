@@ -13,11 +13,11 @@ from homeassistant.components.media_player import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import HtMarqueeConfigEntry
-from .const import DOMAIN, MANUFACTURER, STATE_MAP
+from .const import SOURCE_AUTO, STATE_MAP
 from .coordinator import HtMarqueeCoordinator
+from .entity import HtMarqueeEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,10 +32,9 @@ async def async_setup_entry(
     async_add_entities([HtMarqueeMediaPlayer(coordinator, entry)])
 
 
-class HtMarqueeMediaPlayer(CoordinatorEntity[HtMarqueeCoordinator], MediaPlayerEntity):
+class HtMarqueeMediaPlayer(HtMarqueeEntity, MediaPlayerEntity):
     """Representation of htMarquee as a media player."""
 
-    _attr_has_entity_name = True
     _attr_name = None  # Use device name
     _attr_media_content_type = MediaType.MOVIE
 
@@ -44,20 +43,7 @@ class HtMarqueeMediaPlayer(CoordinatorEntity[HtMarqueeCoordinator], MediaPlayerE
         coordinator: HtMarqueeCoordinator,
         entry: HtMarqueeConfigEntry,
     ) -> None:
-        super().__init__(coordinator)
-        self._entry = entry
-        self._attr_unique_id = f"{entry.entry_id}_media_player"
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        """Return device info with sw_version from coordinator."""
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": "htMarquee",
-            "manufacturer": MANUFACTURER,
-            "model": "Smart Movie Poster Display",
-            "sw_version": self.coordinator.device_sw_version,
-        }
+        super().__init__(coordinator, entry, "media_player")
 
     @property
     def _is_external_source(self) -> bool:
@@ -100,7 +86,10 @@ class HtMarqueeMediaPlayer(CoordinatorEntity[HtMarqueeCoordinator], MediaPlayerE
         """Return current state."""
         if not self.coordinator.data:
             return None
-        htm_state = self.coordinator.data.get("state", "OFFLINE")
+        # Any state the device reports that we don't recognise falls back to
+        # "off" — that used to be a real OFFLINE state, which the device
+        # dropped in the LED release, so today this only catches drift.
+        htm_state = self.coordinator.data.get("state", "")
         slideshow = self.coordinator.data.get("slideshow", {})
         is_paused = slideshow.get("is_paused", False)
 
@@ -153,7 +142,7 @@ class HtMarqueeMediaPlayer(CoordinatorEntity[HtMarqueeCoordinator], MediaPlayerE
         slideshow = self.coordinator.data.get("slideshow", {}) if self.coordinator.data else {}
         playlist_id = slideshow.get("playlist_id")
         if not playlist_id:
-            return "Auto (Upcoming)"
+            return SOURCE_AUTO
         for pl in self.coordinator.playlists:
             if pl.get("id") == playlist_id:
                 return pl.get("name", f"Playlist {playlist_id}")
@@ -162,7 +151,7 @@ class HtMarqueeMediaPlayer(CoordinatorEntity[HtMarqueeCoordinator], MediaPlayerE
     @property
     def source_list(self) -> list[str]:
         """Return list of available playlists."""
-        sources = ["Auto (Upcoming)"]
+        sources = [SOURCE_AUTO]
         for pl in self.coordinator.playlists:
             name = pl.get("name")
             if name:
@@ -231,7 +220,7 @@ class HtMarqueeMediaPlayer(CoordinatorEntity[HtMarqueeCoordinator], MediaPlayerE
 
     async def async_select_source(self, source: str) -> None:
         """Activate a playlist by name."""
-        if source == "Auto (Upcoming)":
+        if source == SOURCE_AUTO:
             await self.coordinator.api.async_deactivate_playlist()
         else:
             for pl in self.coordinator.playlists:

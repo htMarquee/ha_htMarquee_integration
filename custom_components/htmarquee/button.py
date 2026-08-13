@@ -6,12 +6,11 @@ from homeassistant.components.button import ButtonEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import HtMarqueeConfigEntry
 from .api import HtMarqueePremiumRequired
-from .const import DOMAIN, MANUFACTURER
 from .coordinator import HtMarqueeCoordinator
+from .entity import HtMarqueeEntity
 
 
 async def async_setup_entry(
@@ -28,40 +27,18 @@ async def async_setup_entry(
     ])
 
 
-class _HtMarqueeButton(CoordinatorEntity[HtMarqueeCoordinator], ButtonEntity):
-    """Base button with shared device info."""
-
-    _attr_has_entity_name = True
-
-    def __init__(
-        self,
-        coordinator: HtMarqueeCoordinator,
-        entry: HtMarqueeConfigEntry,
-    ) -> None:
-        super().__init__(coordinator)
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.entry_id)},
-            "name": "htMarquee",
-            "manufacturer": MANUFACTURER,
-            "model": "Smart Movie Poster Display",
-        }
-
-
-class HtMarqueePlayTrailerButton(_HtMarqueeButton):
+class HtMarqueePlayTrailerButton(HtMarqueeEntity, ButtonEntity):
     """Button to play the current movie's trailer."""
 
     _attr_name = "Play Trailer"
     _attr_icon = "mdi:movie-play"
 
     def __init__(self, coordinator: HtMarqueeCoordinator, entry: HtMarqueeConfigEntry) -> None:
-        super().__init__(coordinator, entry)
-        self._attr_unique_id = f"{entry.entry_id}_play_trailer"
+        super().__init__(coordinator, entry, "play_trailer")
 
     @property
     def available(self) -> bool:
-        if not self.coordinator.is_premiere:
-            return False
-        return super().available
+        return super().available and self.coordinator.is_premiere
 
     async def async_press(self) -> None:
         try:
@@ -71,49 +48,46 @@ class HtMarqueePlayTrailerButton(_HtMarqueeButton):
         await self.coordinator.async_request_refresh()
 
 
-class HtMarqueeTvOnButton(_HtMarqueeButton):
+class _HtMarqueeCecButton(HtMarqueeEntity, ButtonEntity):
+    """Fire-and-forget CEC power command.
+
+    Superseded by switch.htmarquee_tv, which does the same thing *and*
+    reports the TV's state. These stay so existing automations keep working,
+    and because a dashboard toggle already showing "on" cannot be tapped to
+    re-assert "on" at a TV that ignored the first command.
+    """
+
+    _command: str
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.coordinator.is_premiere and self.coordinator.cec_enabled
+
+    async def async_press(self) -> None:
+        try:
+            await self.coordinator.api.async_cec_power(self._command)
+        except HtMarqueePremiumRequired as err:
+            raise HomeAssistantError("CEC control requires htMarquee Premiere tier") from err
+        await self.coordinator.async_request_refresh()
+
+
+class HtMarqueeTvOnButton(_HtMarqueeCecButton):
     """Button to turn TV on via CEC."""
 
     _attr_name = "TV On"
     _attr_icon = "mdi:television"
+    _command = "on"
 
     def __init__(self, coordinator: HtMarqueeCoordinator, entry: HtMarqueeConfigEntry) -> None:
-        super().__init__(coordinator, entry)
-        self._attr_unique_id = f"{entry.entry_id}_tv_on"
-
-    @property
-    def available(self) -> bool:
-        if not self.coordinator.is_premiere:
-            return False
-        return super().available and self.coordinator.hardware.get("cec_enabled", False)
-
-    async def async_press(self) -> None:
-        try:
-            await self.coordinator.api.async_cec_power("on")
-        except HtMarqueePremiumRequired as err:
-            raise HomeAssistantError("CEC control requires htMarquee Premiere tier") from err
-        await self.coordinator.async_request_refresh()
+        super().__init__(coordinator, entry, "tv_on")
 
 
-class HtMarqueeTvOffButton(_HtMarqueeButton):
+class HtMarqueeTvOffButton(_HtMarqueeCecButton):
     """Button to turn TV off via CEC."""
 
     _attr_name = "TV Off"
     _attr_icon = "mdi:television-off"
+    _command = "off"
 
     def __init__(self, coordinator: HtMarqueeCoordinator, entry: HtMarqueeConfigEntry) -> None:
-        super().__init__(coordinator, entry)
-        self._attr_unique_id = f"{entry.entry_id}_tv_off"
-
-    @property
-    def available(self) -> bool:
-        if not self.coordinator.is_premiere:
-            return False
-        return super().available and self.coordinator.hardware.get("cec_enabled", False)
-
-    async def async_press(self) -> None:
-        try:
-            await self.coordinator.api.async_cec_power("off")
-        except HtMarqueePremiumRequired as err:
-            raise HomeAssistantError("CEC control requires htMarquee Premiere tier") from err
-        await self.coordinator.async_request_refresh()
+        super().__init__(coordinator, entry, "tv_off")

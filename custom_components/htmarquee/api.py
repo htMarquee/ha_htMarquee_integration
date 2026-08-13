@@ -69,13 +69,18 @@ class HtMarqueeApi:
             headers["Authorization"] = f"Bearer {self._token}"
         return headers
 
+    @property
+    def base_url(self) -> str:
+        """Root URL of the device — used for the HA device's 'Visit' link."""
+        return self._base_url
+
     async def _do_request(
         self,
         method: str,
         path: str,
         json: dict | None = None,
         params: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> Any:
         """Execute a single HTTP request with no retry logic."""
         session = await self._ensure_session()
         url = f"{self._base_url}{path}"
@@ -112,8 +117,12 @@ class HtMarqueeApi:
         path: str,
         json: dict | None = None,
         params: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
-        """Execute a request with automatic token refresh on 401."""
+    ) -> Any:
+        """Execute a request with automatic token refresh on 401.
+
+        Returns whatever the endpoint sends — most return an object, but the
+        list endpoints (playlists, presets, showtimes) return a JSON array.
+        """
         try:
             return await self._do_request(method, path, json, params)
         except HtMarqueeAuthError:
@@ -184,6 +193,21 @@ class HtMarqueeApi:
         """Fetch device version/update state (GET /api/system/version)."""
         return await self._request("GET", "/api/system/version")
 
+    # ── OTA updates ─────────────────────────────────────────────────────
+
+    async def async_check_update(self) -> dict[str, Any]:
+        """Ask the device to re-read its update manifest.
+
+        This is not optional bookkeeping: the install endpoint applies
+        whatever descriptor the last *check* cached, so installing without
+        checking first either no-ops or installs a stale target.
+        """
+        return await self._request("POST", "/api/system/update/check")
+
+    async def async_install_update(self) -> dict[str, Any]:
+        """Start installing the available update (device restarts itself)."""
+        return await self._request("POST", "/api/system/update/install")
+
     # ── Control ─────────────────────────────────────────────────────────
 
     async def async_skip(self) -> dict[str, Any]:
@@ -226,8 +250,14 @@ class HtMarqueeApi:
     async def async_get_hardware_status(self) -> dict[str, Any]:
         return await self._request("GET", "/api/hardware/status")
 
+    async def async_get_hardware_metrics(self) -> dict[str, Any]:
+        """CPU/RAM/temperature/uptime snapshot (GET /api/hardware/metrics)."""
+        return await self._request("GET", "/api/hardware/metrics")
+
     async def async_cec_power(self, command: str) -> dict[str, Any]:
         return await self._request("POST", "/api/cec/power", json={"command": command})
+
+    # ── LED strip ───────────────────────────────────────────────────────
 
     async def async_led_power(self, state: bool) -> dict[str, Any]:
         return await self._request("POST", "/api/led/power", json={"state": state})
@@ -237,6 +267,44 @@ class HtMarqueeApi:
 
     async def async_led_color(self, r: int, g: int, b: int) -> dict[str, Any]:
         return await self._request("POST", "/api/led/color", json={"r": r, "g": g, "b": b})
+
+    async def async_led_effect(
+        self, effect: str, speed: int, palette: str | None = None
+    ) -> dict[str, Any]:
+        """Start a named effect. Also powers the strip on, device-side.
+
+        Effect, speed and palette travel together because the device
+        restarts the running effect on every change — sending them as one
+        call is both fewer round trips and one visible restart instead of
+        three.
+        """
+        body: dict[str, Any] = {"effect": effect, "speed": speed}
+        if palette:
+            body["palette"] = palette
+        return await self._request("POST", "/api/led/effect", json=body)
+
+    async def async_led_follow_state(self, enabled: bool) -> dict[str, Any]:
+        """Toggle 'follow display state' (LED auto-mode) on the device."""
+        return await self._request("POST", "/api/led/follow-state", json={"enabled": enabled})
+
+    async def async_get_led_palettes(self) -> list[dict[str, Any]]:
+        data = await self._request("GET", "/api/led/palettes")
+        palettes: list[dict[str, Any]] = data.get("palettes", [])
+        return palettes
+
+    async def async_get_led_presets(self) -> list[dict[str, Any]]:
+        presets: list[dict[str, Any]] = await self._request("GET", "/api/led/presets")
+        return presets
+
+    async def async_apply_led_preset(self, preset_id: int) -> dict[str, Any]:
+        return await self._request("POST", f"/api/led/presets/{preset_id}/apply")
+
+    # ── Scheduled showtimes ─────────────────────────────────────────────
+
+    async def async_get_showtimes(self) -> list[dict[str, Any]]:
+        """Scheduled showings. Premiere-only — 403 on a Matinee device."""
+        showtimes: list[dict[str, Any]] = await self._request("GET", "/api/scheduled-showtimes")
+        return showtimes
 
     # ── Convenience ─────────────────────────────────────────────────────
 
