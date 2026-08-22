@@ -6,15 +6,21 @@ import logging
 from typing import Any
 
 from homeassistant.components.media_player import (
+    BrowseMedia,
+    MediaClass,
     MediaPlayerEntity,
     MediaPlayerEntityFeature,
     MediaPlayerState,
     MediaType,
+    SearchMedia,
+    SearchMediaQuery,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import HtMarqueeConfigEntry
+from .api import HtMarqueeApiError
 from .const import SOURCE_AUTO, STATE_MAP
 from .coordinator import HtMarqueeCoordinator
 from .entity import HtMarqueeEntity
@@ -74,6 +80,12 @@ class HtMarqueeMediaPlayer(HtMarqueeEntity, MediaPlayerEntity):
             | MediaPlayerEntityFeature.NEXT_TRACK
             | MediaPlayerEntityFeature.PREVIOUS_TRACK
             | MediaPlayerEntityFeature.SELECT_SOURCE
+            # BROWSE_MEDIA is what puts the browser dialog on the card, and
+            # SEARCH_MEDIA is what puts the search box inside it. PLAY_MEDIA
+            # is how the frontend hands a picked result back to us.
+            | MediaPlayerEntityFeature.BROWSE_MEDIA
+            | MediaPlayerEntityFeature.SEARCH_MEDIA
+            | MediaPlayerEntityFeature.PLAY_MEDIA
         )
 
     @property
@@ -110,28 +122,40 @@ class HtMarqueeMediaPlayer(HtMarqueeEntity, MediaPlayerEntity):
         return f"{title} ({year})" if year else title
 
     @property
+    def _artwork_path(self) -> str | None:
+        """Device-relative path of the art the media card should show.
+
+        The poster is the identity of the title and is what the media card
+        should lead with. The backdrop was tried here and looked wrong: the
+        card renders art as a small thumbnail plus a colour-extracted
+        background, so a 16:9 still ends up cropped to an unreadable strip.
+        The backdrop is available on its own image entity for anyone who
+        wants it full width.
+
+        Fall back to the backdrop only if a title somehow has no poster.
+        """
+        movie = self._current_movie or {}
+        return movie.get("poster_url") or movie.get("backdrop_url") or None
+
+    @property
     def media_image_url(self) -> str | None:
-        """Return poster URL for the current movie."""
-        movie = self._current_movie
-        if not movie:
-            return None
-        poster = movie.get("poster_url", "")
-        return self.coordinator.api.get_poster_url(poster) if poster else None
+        """Return artwork URL for the current movie."""
+        art = self._artwork_path
+        # get_poster_url is a generic path -> absolute URL joiner despite
+        # the name; it predates there being more than one kind of artwork.
+        return self.coordinator.api.get_poster_url(art) if art else None
 
     @property
     def media_image_remotely_accessible(self) -> bool:
-        """Poster is on the local network, HA needs to proxy it."""
+        """Artwork is on the local network, HA needs to proxy it."""
         return False
 
     async def async_get_media_image(self) -> tuple[bytes | None, str | None]:
-        """Fetch poster via API client (handles self-signed cert)."""
-        movie = self._current_movie
-        if not movie:
+        """Fetch artwork via API client (handles auth + self-signed cert)."""
+        art = self._artwork_path
+        if not art:
             return None, None
-        poster = movie.get("poster_url", "")
-        if not poster:
-            return None, None
-        result = await self.coordinator.api.async_get_image(poster)
+        result = await self.coordinator.api.async_get_image(art)
         if result:
             return result
         return None, None
@@ -227,4 +251,123 @@ class HtMarqueeMediaPlayer(HtMarqueeEntity, MediaPlayerEntity):
                 if pl.get("name") == source:
                     await self.coordinator.api.async_activate_playlist(pl["id"])
                     break
+        await self.coordinator.async_request_refresh()
+
+    # ── Search & browse ─────────────────────────────────────────────────
+    #
+    # These three methods are what turn "spotlight a movie" from a service
+    # call that needs the exact title into a search box with a grid of
+    # posters to pick from. The frontend drives all of it: browse gives the
+    # dialog a root to open, search fills it with results, and play hands
+    # the chosen item back.
+
+    # media_content_id has to survive a round trip through the frontend as
+    # an opaque string, so both kinds carry their own prefix rather than
+    # relying on media_content_type to disambiguate them.
+    _MOVIE_PREFIX = "movie:"
+    _PLAYLIST_PREFIX = "playlist:"
+
+    # TMDB serves poster thumbnails publicly over a valid cert, so search
+    # results can link them directly. The device's own /assets copies could
+    # not be used here: they 403 without the bearer token, and the movie may
+    # not be cached on the device yet at search time anyway.
+    _TMDB_THUMB_BASE = "https://image.tmdb.org/t/p/w342"
+
+    def _movie_to_browse_item(self, movie: dict[str, Any]) -> BrowseMedia:
+        """Turn one /api/movie/search hit into a media-browser entry."""
+        title = movie.get("title") or "Untitled"
+        # release_date is a full ISO date; the year alone disambiguates
+        # remakes, which is the whole reason a picker beats "top result".
+        year = (movie.get("release_date") or "")[:4]
+        poster_path = movie.get("poster_path")
+        return BrowseMedia(
+            media_class=MediaClass.MOVIE,
+            media_content_id=f"{self._MOVIE_PREFIX}{movie.get('id')}",
+            media_content_type=MediaType.MOVIE,
+            title=f"{title} ({year})" if year else title,
+            can_play=True,
+            can_expand=False,
+            thumbnail=f"{self._TMDB_THUMB_BASE}{poster_path}" if poster_path else None,
+        )
+
+    def _playlist_to_browse_item(self, playlist: dict[str, Any]) -> BrowseMedia:
+        """Turn one configured playlist into a media-browser entry."""
+        return BrowseMedia(
+            media_class=MediaClass.PLAYLIST,
+            media_content_id=f"{self._PLAYLIST_PREFIX}{playlist.get('id')}",
+            media_content_type=MediaType.PLAYLIST,
+            title=playlist.get("name") or f"Playlist {playlist.get('id')}",
+            can_play=True,
+            # The API exposes playlists but not their contents, so there is
+            # nothing to drill into.
+            can_expand=False,
+        )
+
+    async def async_search_media(self, query: SearchMediaQuery) -> SearchMedia:
+        """Search the movie catalogue by title."""
+        # The frontend can ask for a subset of classes; movies are all we
+        # return, so an explicit filter that excludes them means no results
+        # rather than an unfiltered list.
+        if query.media_filter_classes and MediaClass.MOVIE not in query.media_filter_classes:
+            return SearchMedia(result=[])
+
+        try:
+            data = await self.coordinator.api.async_search_movies(query.search_query)
+        except HtMarqueeApiError as err:
+            raise HomeAssistantError(f"htMarquee search failed: {err}") from err
+
+        results = data.get("results") or []
+        return SearchMedia(result=[self._movie_to_browse_item(m) for m in results])
+
+    async def async_browse_media(
+        self,
+        media_content_type: MediaType | str | None = None,
+        media_content_id: str | None = None,
+    ) -> BrowseMedia:
+        """Return the browsable root: the device's playlists.
+
+        There is no tree to walk — nothing here expands — but a root is
+        required before the frontend will offer the dialog that hosts the
+        search box, and listing the playlists makes the trip worthwhile.
+        """
+        if media_content_id is not None and media_content_id != self._PLAYLIST_PREFIX:
+            # Every child is can_expand=False, so this only fires if the
+            # frontend asks for something we never handed it.
+            raise HomeAssistantError(f"htMarquee cannot browse '{media_content_id}'")
+
+        return BrowseMedia(
+            media_class=MediaClass.DIRECTORY,
+            media_content_id=self._PLAYLIST_PREFIX,
+            media_content_type=MediaType.PLAYLIST,
+            title="htMarquee",
+            can_play=False,
+            can_expand=True,
+            can_search=True,
+            search_media_classes=[MediaClass.MOVIE],
+            children_media_class=MediaClass.PLAYLIST,
+            children=[self._playlist_to_browse_item(pl) for pl in self.coordinator.playlists],
+        )
+
+    async def async_play_media(
+        self, media_type: MediaType | str, media_id: str, **kwargs: Any
+    ) -> None:
+        """Spotlight a picked movie, or activate a picked playlist."""
+        try:
+            if media_id.startswith(self._MOVIE_PREFIX):
+                tmdb_id = int(media_id.removeprefix(self._MOVIE_PREFIX))
+                await self.coordinator.api.async_manual(tmdb_id)
+            elif media_id.startswith(self._PLAYLIST_PREFIX):
+                playlist_id = int(media_id.removeprefix(self._PLAYLIST_PREFIX))
+                await self.coordinator.api.async_activate_playlist(playlist_id)
+            else:
+                raise HomeAssistantError(
+                    f"htMarquee cannot play '{media_id}' — expected a movie or playlist"
+                )
+        except ValueError as err:
+            # A prefix with a non-numeric id behind it: malformed, not a
+            # device failure, so say so rather than surfacing int()'s message.
+            raise HomeAssistantError(f"htMarquee got a malformed media id '{media_id}'") from err
+        except HtMarqueeApiError as err:
+            raise HomeAssistantError(f"htMarquee could not play the selection: {err}") from err
+
         await self.coordinator.async_request_refresh()

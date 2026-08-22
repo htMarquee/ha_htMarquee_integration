@@ -44,6 +44,7 @@ SOURCE_AUTO = "Auto (Upcoming)"
 
 PLATFORMS = [
     Platform.BUTTON,
+    Platform.IMAGE,
     Platform.LIGHT,
     Platform.MEDIA_PLAYER,
     Platform.NUMBER,

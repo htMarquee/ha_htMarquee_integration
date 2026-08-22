@@ -8,7 +8,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_DEVICE_ID
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv, device_registry as dr
 
@@ -41,6 +41,20 @@ SPOTLIGHT_SCHEMA = vol.Schema({
 
 async def async_setup_entry(hass: HomeAssistant, entry: HtMarqueeConfigEntry) -> bool:
     """Set up htMarquee from a config entry."""
+    @callback
+    def _persist_token(token: str) -> None:
+        """Write a refreshed token back to the config entry.
+
+        async_login only updates the in-memory copy, so without this every
+        restart replays the stale token from storage, takes a 403, and logs
+        in again. This entry has no update listener, so writing to it does
+        not trigger a reload.
+        """
+        if entry.data.get(CONF_TOKEN) != token:
+            hass.config_entries.async_update_entry(
+                entry, data={**entry.data, CONF_TOKEN: token}
+            )
+
     api = HtMarqueeApi(
         host=entry.data[CONF_HOST],
         port=entry.data[CONF_PORT],
@@ -48,6 +62,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HtMarqueeConfigEntry) ->
         token=entry.data.get(CONF_TOKEN),
         username=entry.data.get(CONF_USERNAME),
         password=entry.data.get(CONF_PASSWORD),
+        token_updated_cb=_persist_token,
     )
 
     coordinator = HtMarqueeCoordinator(hass, api)

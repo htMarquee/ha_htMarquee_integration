@@ -11,9 +11,21 @@ Control your htMarquee display as a standard Home Assistant media player:
 - **Play/Pause** the poster slideshow
 - **Skip** forward or back through movies
 - **Select playlist** as the media source (or use Auto/Upcoming)
+- **Search and browse** — search the movie catalogue from Home Assistant's media browser and send any title straight to the display. The browse root also lists your playlists, so a playlist is one tap from the same place.
 - **Movie poster** shown as the media player thumbnail
 - **External source awareness** — when an external app (e.g. Plex) is driving htMarquee, playback controls are automatically hidden and the app name is exposed via `app_name`
 - **Rich attributes**: TMDB ID, genres, rating, runtime, vote average, RT score, Metacritic score, tagline, phase, current index, total items, state label
+
+### Images
+Poster art as first-class entities, so it can be used in any dashboard card:
+
+- **`image.htmarquee_poster`** — the portrait theatrical poster for whatever is on screen
+- **`image.htmarquee_backdrop`** — the wide 16:9 backdrop, which suits banner-style cards far better than a cropped poster
+- **`image.htmarquee_studio_logo`** — the distributing studio's logo (transparent PNG)
+
+These exist because the device's artwork cannot be linked to directly: every `/assets/*` path requires the API token, and the device presents a self-signed certificate, so a browser pointed at it draws a broken image. Home Assistant fetches the bytes with the API client's credentials and re-serves them from its own proxied URL.
+
+Each entity reports unavailable when the current title has no such artwork — TMDB does not carry a backdrop or a studio logo for everything.
 
 ### LED strip
 The full LED system, not just on/off:
@@ -41,7 +53,7 @@ CEC power reporting lags a few seconds behind a command — the device fires it 
 ### Sensors
 - **Current Movie** — title with metadata attributes (year, genres, rating, vote average, runtime, RT score, Metacritic score, tagline, aspect ratio, poster URL, state label)
 - **Slideshow Phase** — current phase (POSTER_REVEAL, TRAILER, POSTER_HOLD, TRANSITION, INTERSTITIAL) with phase duration, transition effect, and paused state
-- **Next Showtime** — the next Scheduled Showing as a timestamp, with the movie title and the day's other times as attributes. Premiere-only; the entity isn't created if the device doesn't offer the feature. Times are read in Home Assistant's timezone, which is right whenever both live in the same house.
+- **Next Showtime** — the next Scheduled Showing as a timestamp, with the movie title and the day's other times as attributes. Premiere-only; the entity isn't created if the device doesn't offer the feature. Times are read in Home Assistant's timezone, which is right whenever both live in the same house. The `upcoming` attribute carries the whole schedule ahead as a list — one entry per screening, so a film with two showings that day appears twice — capped at 10 so the attribute cannot grow without bound.
 - **Diagnostics**: CPU Usage, Memory Usage, CPU Temperature, Last Boot, Cache Disk Free
 
 ### Buttons

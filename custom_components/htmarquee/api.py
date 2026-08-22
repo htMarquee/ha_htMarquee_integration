@@ -4,12 +4,29 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import ssl
+from collections.abc import Callable
 from typing import Any
 
 import aiohttp
 
+from homeassistant.util.ssl import get_default_no_verify_context
+
 _LOGGER = logging.getLogger(__name__)
+
+# The device reports a dead JWT as HTTP 403 with a *string* detail
+# ({"detail": "Invalid or expired token"}), not the 401 this client was
+# originally written against. Recognising it is what lets _request
+# re-login instead of raising a generic ApiError and leaving the token
+# stale forever. Kept deliberately loose: the wording is the device's to
+# change, and a missed match silently breaks every image again.
+_TOKEN_REJECTED_RE = re.compile(
+    r"(invalid|expired|missing)[^.]*\btoken\b"
+    r"|\btoken\b[^.]*(invalid|expired)"
+    r"|not authenticated",
+    re.IGNORECASE,
+)
 
 
 class HtMarqueeApiError(Exception):
@@ -36,7 +53,11 @@ class HtMarqueeApi:
         username: str | None = None,
         password: str | None = None,
         session: aiohttp.ClientSession | None = None,
+        token_updated_cb: Callable[[str], None] | None = None,
     ) -> None:
+        # Called with each freshly minted token so the caller can persist
+        # it; without it a refresh lives only until the next restart.
+        self._token_updated_cb = token_updated_cb
         self._host = host
         self._port = port
         self._use_ssl = use_ssl
@@ -48,13 +69,22 @@ class HtMarqueeApi:
         self._relogin_lock = asyncio.Lock()
         scheme = "https" if use_ssl else "http"
         self._base_url = f"{scheme}://{host}:{port}"
-        # Self-signed cert support — explicit context is more reliable than ssl=False
-        if use_ssl:
-            self._ssl_context: ssl.SSLContext | None = ssl.create_default_context()
-            self._ssl_context.check_hostname = False
-            self._ssl_context.verify_mode = ssl.CERT_NONE
-        else:
-            self._ssl_context = None
+        # The device presents a self-signed cert from its own CA, with a CN
+        # that doesn't match the configured host, so verification has to be
+        # off either way. Home Assistant's shared no-verify context is
+        # exactly that pairing (check_hostname=False, verify_mode=CERT_NONE)
+        # and every variant of it is built once at import time.
+        #
+        # Building one here with ssl.create_default_context() instead read
+        # the system CA bundle off disk on every setup — blocking I/O inside
+        # the event loop, which HA warned about on every start — and then
+        # CERT_NONE threw that bundle away unused.
+        #
+        # Never mutate this context: it is shared with every other caller in
+        # the process. It already has the settings this client needs.
+        self._ssl_context: ssl.SSLContext | None = (
+            get_default_no_verify_context() if use_ssl else None
+        )
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -103,6 +133,11 @@ class HtMarqueeApi:
                         raise HtMarqueePremiumRequired(
                             detail.get("message", "This feature requires a Premiere license.")
                         )
+                    # A rejected token arrives here too -- same 403, but a
+                    # string detail rather than the tier gate's dict. Raise
+                    # AuthError so _request refreshes and retries.
+                    if isinstance(detail, str) and _TOKEN_REJECTED_RE.search(detail):
+                        raise HtMarqueeAuthError(f"Token rejected: {detail}")
                     raise HtMarqueeApiError(f"Forbidden: {body}")
                 if resp.status >= 400:
                     text = await resp.text()
@@ -173,6 +208,8 @@ class HtMarqueeApi:
             if not token:
                 raise HtMarqueeApiError("No token in login response")
             self._token = token
+            if self._token_updated_cb is not None:
+                self._token_updated_cb(token)
             return token
 
     async def async_get_auth_status(self) -> dict[str, Any]:
@@ -316,17 +353,78 @@ class HtMarqueeApi:
             return poster_path
         return f"{self._base_url}{poster_path}"
 
-    async def async_get_image(self, path: str) -> tuple[bytes, str] | None:
-        """Fetch an image from htMarquee. Returns (content, content_type) or None."""
+    async def _do_get_image(self, url: str) -> tuple[bytes, str] | None:
+        """One image fetch attempt.
+
+        Raises HtMarqueeAuthError when the token was rejected so the caller
+        can refresh; returns None for any other failure.
+        """
         session = await self._ensure_session()
+        async with session.get(
+            url, headers=self._headers(), timeout=aiohttp.ClientTimeout(total=10)
+        ) as resp:
+            if resp.status in (401, 403):
+                detail = ""
+                try:
+                    body = await resp.json()
+                    raw = body.get("detail")
+                    detail = raw if isinstance(raw, str) else ""
+                except Exception:  # noqa: BLE001 - body may not be JSON
+                    pass
+                if resp.status == 401 or _TOKEN_REJECTED_RE.search(detail):
+                    raise HtMarqueeAuthError(
+                        f"Image request rejected ({resp.status}): {detail or 'no detail'}"
+                    )
+            if resp.status != 200:
+                _LOGGER.warning(
+                    "htMarquee image fetch failed: %s returned HTTP %s", url, resp.status
+                )
+                return None
+            content_type = resp.content_type or "image/jpeg"
+            return await resp.read(), content_type
+
+    async def async_get_image(self, path: str) -> tuple[bytes, str] | None:
+        """Fetch an image, re-logging in once if the token has expired.
+
+        Assets are the only place this client reads raw bytes instead of
+        JSON, so it cannot go through _request; this repeats _request's
+        refresh-on-auth-failure logic instead. It previously swallowed every
+        non-200 as None, which meant an expired token turned all three image
+        entities into broken images with nothing in the log -- /api/status
+        kept returning 200, so the integration otherwise looked healthy.
+        """
         url = path if path.startswith("http") else f"{self._base_url}{path}"
         try:
-            async with session.get(
-                url, headers=self._headers(), timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
-                if resp.status != 200:
-                    return None
-                content_type = resp.content_type or "image/jpeg"
-                return await resp.read(), content_type
-        except aiohttp.ClientError:
+            return await self._do_get_image(url)
+        except HtMarqueeAuthError as err:
+            if not self._username or not self._password:
+                _LOGGER.warning(
+                    "htMarquee image auth failed and no stored credentials to "
+                    "re-login with: %s", err
+                )
+                return None
+            # Same guarded re-login as _request: concurrent image fetches
+            # wait on the lock, then find the token already refreshed.
+            stale_token = self._token
+            async with self._relogin_lock:
+                if self._token == stale_token:
+                    try:
+                        await self.async_login(self._username, self._password)
+                        _LOGGER.info(
+                            "htMarquee token refreshed after an image request was rejected"
+                        )
+                    except (HtMarqueeAuthError, HtMarqueeApiError) as login_err:
+                        _LOGGER.warning(
+                            "htMarquee re-login failed during image fetch: %s", login_err
+                        )
+                        return None
+            try:
+                return await self._do_get_image(url)
+            except HtMarqueeAuthError as retry_err:
+                _LOGGER.warning(
+                    "htMarquee image still rejected after refresh: %s", retry_err
+                )
+                return None
+        except aiohttp.ClientError as err:
+            _LOGGER.warning("htMarquee image fetch error for %s: %s", url, err)
             return None

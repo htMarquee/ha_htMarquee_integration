@@ -30,6 +30,11 @@ from .entity import HtMarqueeEntity
 # far more, ordinary jitter never does.
 _UPTIME_DRIFT_TOLERANCE = timedelta(seconds=60)
 
+# How many future screenings the next-showtime sensor lists in its
+# "upcoming" attribute. Attributes are rewritten to the state machine and
+# the recorder on every update, so an unbounded schedule would bloat both.
+_MAX_UPCOMING = 10
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -285,7 +290,7 @@ class HtMarqueeNextShowtimeSensor(HtMarqueeEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         upcoming = self._upcoming()
         if not upcoming:
-            return {"upcoming_count": 0}
+            return {"upcoming_count": 0, "upcoming": []}
         _, showtime = upcoming[0]
         return {
             "upcoming_count": len(upcoming),
@@ -294,4 +299,20 @@ class HtMarqueeNextShowtimeSensor(HtMarqueeEntity, SensorEntity):
             "showtime_date": showtime.get("showtime_date"),
             "times": showtime.get("times"),
             "notes": showtime.get("notes"),
+            # The whole schedule, one entry per screening rather than per
+            # film — a showtime with two times is two entries here, which is
+            # what a "what's on" list wants. Capped because every attribute
+            # is written to the state machine and the recorder on each
+            # update, and this list has no natural upper bound.
+            "upcoming": [
+                {
+                    "movie_title": item.get("movie_title"),
+                    "tmdb_id": item.get("tmdb_id"),
+                    "when": when.isoformat(),
+                    "date": when.strftime("%Y-%m-%d"),
+                    "time": when.strftime("%H:%M"),
+                    "notes": item.get("notes"),
+                }
+                for when, item in upcoming[:_MAX_UPCOMING]
+            ],
         }
