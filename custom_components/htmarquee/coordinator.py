@@ -109,34 +109,48 @@ class HtMarqueeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return bool(self.hardware.get("cec_enabled"))
 
     async def _async_update_data(self) -> dict[str, Any]:
+        # ONE auth handler around the whole refresh, not just the status call.
+        # /api/status is a PUBLIC endpoint on the device (the display itself reads
+        # it), so it keeps answering 200 after the credential stops working. The
+        # only place a revoked API token or a changed password shows up is in the
+        # slower groups below - and those used to swallow every error. The result,
+        # seen live on 2026-11-24 after a token was revoked: the entry stayed
+        # "loaded", every entity stayed available with frozen values, and Home
+        # Assistant never asked for a new token.
+        # ConfigEntryAuthFailed is what makes Home Assistant start the reauth flow;
+        # UpdateFailed would just retry forever with the dead credential.
         try:
-            status = await self.api.async_get_status()
+            try:
+                status = await self.api.async_get_status()
+            except HtMarqueeAuthError:
+                raise
+            except HtMarqueeApiError as err:
+                raise UpdateFailed(f"API error: {err}") from err
+
+            # Track license tier from status response
+            new_tier = status.get("license_tier", self.tier)
+            if new_tier != self.tier:
+                _LOGGER.info("htMarquee tier changed: %s -> %s", self.tier, new_tier)
+                self.tier = new_tier
+
+            now = time.monotonic()
+            if now >= self._next_hardware:
+                self._next_hardware = now + HARDWARE_SCAN_INTERVAL
+                await self._async_refresh_hardware_group()
+            if now >= self._next_playlists:
+                self._next_playlists = now + PLAYLIST_SCAN_INTERVAL
+                await self._fetch("playlists", self.api.async_get_playlists)
+                await self._fetch("led_presets", self.api.async_get_led_presets)
+            if now >= self._next_catalog:
+                self._next_catalog = now + CATALOG_SCAN_INTERVAL
+                await self._fetch("led_palettes", self.api.async_get_led_palettes)
+                await self._async_refresh_showtimes()
         except HtMarqueeAuthError as err:
-            # Surfacing this as UpdateFailed just retried forever with a dead
-            # credential; ConfigEntryAuthFailed makes HA start a reauth flow
-            # and prompt the user for the new PIN/password.
+            # The group that failed must be tried again on the very next tick, or a
+            # reauth that Home Assistant has not started yet would wait out the
+            # group's deadline first.
+            self._next_hardware = self._next_playlists = self._next_catalog = 0.0
             raise ConfigEntryAuthFailed(f"Auth error: {err}") from err
-        except HtMarqueeApiError as err:
-            raise UpdateFailed(f"API error: {err}") from err
-
-        # Track license tier from status response
-        new_tier = status.get("license_tier", self.tier)
-        if new_tier != self.tier:
-            _LOGGER.info("htMarquee tier changed: %s -> %s", self.tier, new_tier)
-            self.tier = new_tier
-
-        now = time.monotonic()
-        if now >= self._next_hardware:
-            self._next_hardware = now + HARDWARE_SCAN_INTERVAL
-            await self._async_refresh_hardware_group()
-        if now >= self._next_playlists:
-            self._next_playlists = now + PLAYLIST_SCAN_INTERVAL
-            await self._fetch("playlists", self.api.async_get_playlists)
-            await self._fetch("led_presets", self.api.async_get_led_presets)
-        if now >= self._next_catalog:
-            self._next_catalog = now + CATALOG_SCAN_INTERVAL
-            await self._fetch("led_palettes", self.api.async_get_led_palettes)
-            await self._async_refresh_showtimes()
 
         return status
 
@@ -149,6 +163,11 @@ class HtMarqueeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         try:
             setattr(self, attr, await call())
+        except HtMarqueeAuthError:
+            # Not optional: a rejected credential is the caller's to report (see
+            # _async_update_data). It is a subclass of HtMarqueeApiError, so
+            # without this clause the line below would swallow it.
+            raise
         except HtMarqueeApiError as err:
             _LOGGER.debug("Failed to refresh %s: %s", attr, err)
 
@@ -159,6 +178,8 @@ class HtMarqueeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             self.version = await self.api.async_get_system_version()
             self.device_sw_version = self.version.get("version")
+        except HtMarqueeAuthError:
+            raise
         except HtMarqueeApiError as err:
             _LOGGER.debug("Failed to refresh device version: %s", err)
 
@@ -167,6 +188,8 @@ class HtMarqueeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             self.showtimes = await self.api.async_get_showtimes()
             self.showtimes_supported = True
+        except HtMarqueeAuthError:
+            raise
         except HtMarqueeApiError as err:
             if self.showtimes_supported is None:
                 self.showtimes_supported = False
@@ -181,7 +204,15 @@ class HtMarqueeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         hardware deadline came round.
         """
         self._next_hardware = time.monotonic() + HARDWARE_SCAN_INTERVAL
-        await self._async_refresh_hardware_group()
+        try:
+            await self._async_refresh_hardware_group()
+        except HtMarqueeAuthError:
+            # Called right after a command, outside the polling loop, so there is no
+            # ConfigEntryAuthFailed to raise here. Make the next poll re-read this
+            # group at once; that poll reports the rejected credential properly.
+            self._next_hardware = 0.0
+            await self.async_request_refresh()
+            return
         self.async_update_listeners()
 
     async def async_refresh_led_presets(self) -> None:

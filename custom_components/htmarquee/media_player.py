@@ -215,41 +215,60 @@ class HtMarqueeMediaPlayer(HtMarqueeEntity, MediaPlayerEntity):
 
     # ── Controls ────────────────────────────────────────────────────────
 
+    async def _command(self, what: str, call: Any, *args: Any) -> None:
+        """Send one transport command; a device refusal becomes a HomeAssistantError.
+
+        These five controls used to call the device bare. A refusal (a revoked
+        token, "Resume only available in Spotlight mode", a timeout) then reached
+        Home Assistant as an unhandled exception: an HTTP 500 for the caller and a
+        traceback in the log, instead of the one-line error every other control
+        in this integration gives.
+        """
+        try:
+            await call(*args)
+        except HtMarqueeApiError as err:
+            raise HomeAssistantError(f"htMarquee could not {what}: {err}") from err
+
     async def async_media_play(self) -> None:
         """Resume slideshow or exit spotlight."""
         data = self.coordinator.data or {}
         if data.get("state") == "MANUAL":
-            await self.coordinator.api.async_resume()
+            await self._command("resume", self.coordinator.api.async_resume)
         else:
             # Unpause
             slideshow = data.get("slideshow", {})
             if slideshow.get("is_paused"):
-                await self.coordinator.api.async_pause()  # toggle
+                await self._command("resume", self.coordinator.api.async_pause)  # toggle
         await self.coordinator.async_request_refresh()
 
     async def async_media_pause(self) -> None:
         """Pause slideshow."""
-        await self.coordinator.api.async_pause()
+        await self._command("pause", self.coordinator.api.async_pause)
         await self.coordinator.async_request_refresh()
 
     async def async_media_next_track(self) -> None:
         """Skip to next movie."""
-        await self.coordinator.api.async_skip()
+        await self._command("skip to the next movie", self.coordinator.api.async_skip)
         await self.coordinator.async_request_refresh()
 
     async def async_media_previous_track(self) -> None:
         """Go to previous movie."""
-        await self.coordinator.api.async_previous()
+        await self._command("go back to the previous movie", self.coordinator.api.async_previous)
         await self.coordinator.async_request_refresh()
 
     async def async_select_source(self, source: str) -> None:
         """Activate a playlist by name."""
         if source == SOURCE_AUTO:
-            await self.coordinator.api.async_deactivate_playlist()
+            await self._command(
+                "switch the playlist", self.coordinator.api.async_deactivate_playlist
+            )
         else:
             for pl in self.coordinator.playlists:
                 if pl.get("name") == source:
-                    await self.coordinator.api.async_activate_playlist(pl["id"])
+                    await self._command(
+                        "switch the playlist",
+                        self.coordinator.api.async_activate_playlist, pl["id"],
+                    )
                     break
         await self.coordinator.async_request_refresh()
 
