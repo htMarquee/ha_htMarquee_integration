@@ -29,6 +29,19 @@ _TOKEN_REJECTED_RE = re.compile(
 )
 
 
+# Whole-request budget for an ordinary call, in seconds. Every normal endpoint answers
+# in well under a second on the LAN.
+REQUEST_TIMEOUT_S = 15
+
+# Spotlight (POST /api/control/manual) is the exception. For a movie the device has not
+# cached, it downloads the metadata and artwork BEFORE answering, and one step of that
+# (an aspect-ratio lookup on Wikidata) waits out its own 15 s timeout when the device's
+# network blocks it. Measured on a real device 2026-11-24: 16.7 s for an uncached title,
+# which the old shared 15 s budget turned into a "failed" spotlight that then appeared
+# on the display anyway. 60 s leaves room for that lookup plus slow artwork downloads.
+SPOTLIGHT_TIMEOUT_S = 60
+
+
 class HtMarqueeApiError(Exception):
     """API communication error."""
 
@@ -110,14 +123,21 @@ class HtMarqueeApi:
         path: str,
         json: dict | None = None,
         params: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> Any:
-        """Execute a single HTTP request with no retry logic."""
+        """Execute a single HTTP request with no retry logic.
+
+        `timeout` is the whole-request budget in seconds; None means the default
+        (REQUEST_TIMEOUT_S, read here rather than as a default argument so a test
+        can shorten it).
+        """
         session = await self._ensure_session()
         url = f"{self._base_url}{path}"
+        budget = REQUEST_TIMEOUT_S if timeout is None else timeout
         try:
             async with session.request(
                 method, url, headers=self._headers(), json=json, params=params,
-                timeout=aiohttp.ClientTimeout(total=15),
+                timeout=aiohttp.ClientTimeout(total=budget),
             ) as resp:
                 if resp.status == 401:
                     raise HtMarqueeAuthError("Authentication failed")
@@ -145,6 +165,15 @@ class HtMarqueeApi:
                 return await resp.json()
         except aiohttp.ClientError as err:
             raise HtMarqueeApiError(f"Connection error: {err}") from err
+        except TimeoutError as err:
+            # aiohttp reports an exceeded ClientTimeout as a bare TimeoutError, which is
+            # NOT an aiohttp.ClientError. Left alone it escaped every caller's
+            # `except HtMarqueeApiError` and reached Home Assistant as a raw traceback
+            # ("Task exception was never retrieved"). The device may still carry the
+            # request out - a timeout only means we stopped waiting.
+            raise HtMarqueeApiError(
+                f"The device did not answer within {budget:g} s ({method} {path})"
+            ) from err
 
     async def _request(
         self,
@@ -152,6 +181,7 @@ class HtMarqueeApi:
         path: str,
         json: dict | None = None,
         params: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> Any:
         """Execute a request with automatic token refresh on 401.
 
@@ -159,7 +189,7 @@ class HtMarqueeApi:
         list endpoints (playlists, presets, showtimes) return a JSON array.
         """
         try:
-            return await self._do_request(method, path, json, params)
+            return await self._do_request(method, path, json, params, timeout)
         except HtMarqueeAuthError:
             if not self._username or not self._password:
                 raise
@@ -175,7 +205,7 @@ class HtMarqueeApi:
                             f"Authentication failed and re-login unsuccessful: {login_err}"
                         ) from login_err
             # Retry once with fresh token — no further retry on failure
-            return await self._do_request(method, path, json, params)
+            return await self._do_request(method, path, json, params, timeout)
 
     async def close(self) -> None:
         if self._owns_session and self._session and not self._session.closed:
@@ -276,7 +306,12 @@ class HtMarqueeApi:
         return await self._request("POST", "/api/control/play-trailer")
 
     async def async_manual(self, tmdb_id: int) -> dict[str, Any]:
-        return await self._request("POST", "/api/control/manual", json={"tmdb_id": tmdb_id})
+        """Spotlight a movie. Slow for a movie the device has not cached yet - see
+        SPOTLIGHT_TIMEOUT_S."""
+        return await self._request(
+            "POST", "/api/control/manual", json={"tmdb_id": tmdb_id},
+            timeout=SPOTLIGHT_TIMEOUT_S,
+        )
 
     # ── Search ──────────────────────────────────────────────────────────
 
