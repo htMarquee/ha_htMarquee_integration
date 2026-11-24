@@ -12,7 +12,17 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 
 from .api import HtMarqueeApi, HtMarqueeApiError, HtMarqueeAuthError
-from .const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_TOKEN, CONF_USE_SSL, CONF_USERNAME, DEFAULT_PORT, DOMAIN
+from .const import (
+    API_TOKEN_PREFIX,
+    CONF_HOST,
+    CONF_PASSWORD,
+    CONF_PORT,
+    CONF_TOKEN,
+    CONF_USE_SSL,
+    CONF_USERNAME,
+    DEFAULT_PORT,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -65,6 +75,23 @@ STEP_AUTH_PIN_SCHEMA = vol.Schema(
     }
 )
 
+STEP_API_TOKEN_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_TOKEN): str,
+    }
+)
+
+
+def uses_api_token(entry_data: Mapping[str, Any]) -> bool:
+    """True when a config entry signs in with an API token rather than a password.
+
+    A token-based entry stores only the token. A password-based entry also
+    stores a token (the last login session), so the password's absence plus
+    the reserved prefix is what tells them apart.
+    """
+    token = entry_data.get(CONF_TOKEN) or ""
+    return not entry_data.get(CONF_PASSWORD) and token.startswith(API_TOKEN_PREFIX)
+
 
 class HtMarqueeConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for htMarquee."""
@@ -106,7 +133,7 @@ class HtMarqueeConfigFlow(ConfigFlow, domain=DOMAIN):
                 if auth_enabled:
                     self._auth_mode = auth_status.get("auth_mode", "password")
                     await api.close()
-                    return await self.async_step_auth()
+                    return await self.async_step_auth_method()
 
                 # No auth — create entry directly
                 await api.close()
@@ -126,6 +153,70 @@ class HtMarqueeConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user",
             data_schema=STEP_USER_SCHEMA,
+            errors=errors,
+        )
+
+    async def async_step_auth_method(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Let the user choose how Home Assistant signs in.
+
+        An API token (htMarquee 1.6.0+, Premiere) is the better choice: it
+        can be revoked on its own and Home Assistant never stores the admin
+        password. The password/PIN path stays for older firmware and Matinee.
+        The menu options are step ids; the second one depends on the
+        device's auth mode so the next form asks for the right thing.
+        """
+        return self.async_show_menu(
+            step_id="auth_method",
+            menu_options=["api_token", "auth_pin" if self._auth_mode == "pin" else "auth"],
+        )
+
+    async def _async_check_api_token(self, token: str) -> str | None:
+        """Try a pasted API token against the device. Returns an error key, or None if it works."""
+        if not token.startswith(API_TOKEN_PREFIX):
+            # Catches a pasted password or a truncated copy before a network
+            # round trip, with a message that says what a token looks like.
+            return "invalid_token_format"
+        api = HtMarqueeApi(self._host, self._port, self._use_ssl, token=token)
+        try:
+            await api.async_validate_token()
+        except HtMarqueeAuthError:
+            return "invalid_token"
+        except HtMarqueeApiError:
+            return "cannot_connect"
+        finally:
+            await api.close()
+        return None
+
+    async def async_step_api_token(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Sign in with an API token created in htMarquee (Settings → Integrations)."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            token = user_input[CONF_TOKEN].strip()
+            error = await self._async_check_api_token(token)
+            if error:
+                errors["base"] = error
+            else:
+                await self.async_set_unique_id(f"htmarquee_{self._host}")
+                self._abort_if_unique_id_configured()
+                # No username or password is stored: that is the point.
+                return self.async_create_entry(
+                    title=f"htMarquee ({self._host})",
+                    data={
+                        CONF_HOST: self._host,
+                        CONF_PORT: self._port,
+                        CONF_USE_SSL: self._use_ssl,
+                        CONF_TOKEN: token,
+                    },
+                )
+
+        return self.async_show_form(
+            step_id="api_token",
+            data_schema=STEP_API_TOKEN_SCHEMA,
             errors=errors,
         )
 
@@ -203,7 +294,36 @@ class HtMarqueeConfigFlow(ConfigFlow, domain=DOMAIN):
         finally:
             await api.close()
 
+        # An entry that signs in with an API token has no password to ask
+        # for: the token was revoked or expired, so ask for a new token.
+        if uses_api_token(entry_data):
+            return await self.async_step_reauth_api_token()
         return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_api_token(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Collect and verify a replacement API token."""
+        errors: dict[str, str] = {}
+        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        assert entry is not None
+
+        if user_input is not None:
+            token = user_input[CONF_TOKEN].strip()
+            error = await self._async_check_api_token(token)
+            if error:
+                errors["base"] = error
+            else:
+                return self.async_update_reload_and_abort(
+                    entry, data={**entry.data, CONF_TOKEN: token}
+                )
+
+        return self.async_show_form(
+            step_id="reauth_api_token",
+            data_schema=STEP_API_TOKEN_SCHEMA,
+            errors=errors,
+            description_placeholders={"host": self._host},
+        )
 
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None

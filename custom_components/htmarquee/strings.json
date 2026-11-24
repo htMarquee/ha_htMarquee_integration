@@ -10,6 +10,22 @@
           "use_ssl": "Use HTTPS"
         }
       },
+      "auth_method": {
+        "title": "How should Home Assistant sign in?",
+        "description": "An API token is recommended: you can revoke it on its own, and Home Assistant never stores your admin password. Tokens need htMarquee 1.6.0 or newer with a Premiere license.",
+        "menu_options": {
+          "api_token": "API token (recommended)",
+          "auth": "Admin username and password",
+          "auth_pin": "Admin PIN"
+        }
+      },
+      "api_token": {
+        "title": "API token",
+        "description": "In the htMarquee web app open Settings → Integrations → API Tokens, create a token named for example \"Home Assistant\", and paste it here. It is shown only once.",
+        "data": {
+          "token": "API token"
+        }
+      },
       "auth": {
         "title": "Authentication",
         "description": "Enter your htMarquee admin credentials.",
@@ -32,11 +48,20 @@
           "username": "Username",
           "password": "Password or PIN"
         }
+      },
+      "reauth_api_token": {
+        "title": "Reauthenticate htMarquee",
+        "description": "htMarquee at {host} rejected the stored API token. It was probably revoked or has expired. Create a new token in the htMarquee web app (Settings → Integrations → API Tokens) and paste it here.",
+        "data": {
+          "token": "API token"
+        }
       }
     },
     "error": {
       "cannot_connect": "Unable to connect to htMarquee",
-      "invalid_auth": "Invalid credentials"
+      "invalid_auth": "Invalid credentials",
+      "invalid_token": "htMarquee did not accept this token. Check it was copied completely and has not been revoked. Tokens need htMarquee 1.6.0 or newer.",
+      "invalid_token_format": "That does not look like an htMarquee API token. A token starts with htm_."
     },
     "abort": {
       "already_configured": "This htMarquee device is already configured",

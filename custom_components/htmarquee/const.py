@@ -13,6 +13,11 @@ CONF_TOKEN = "token"
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
 
+# Every htMarquee API token starts with this (the device reserves the prefix;
+# a login session token is a JWT and starts with "eyJ"). The config flow uses
+# it to tell a token-based entry from a password-based one when re-authenticating.
+API_TOKEN_PREFIX = "htm_"
+
 DEFAULT_PORT = 443
 TIER_PREMIERE = "premiere"
 TIER_MATINEE = "matinee"

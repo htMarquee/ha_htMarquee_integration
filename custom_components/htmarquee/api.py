@@ -212,6 +212,19 @@ class HtMarqueeApi:
                 self._token_updated_cb(token)
             return token
 
+    async def async_validate_token(self) -> None:
+        """Prove the token this client holds is accepted by the device.
+
+        Used by the config flow for a pasted API token, where there is no
+        login call whose success would prove it. /api/system/version needs
+        authentication and exists on every firmware, so a rejected token
+        raises HtMarqueeAuthError here rather than later in the coordinator.
+
+        Deliberately _do_request, not _request: there must be no attempt to
+        "refresh" by logging in — a wrong token is simply wrong.
+        """
+        await self._do_request("GET", "/api/system/version")
+
     async def async_get_auth_status(self) -> dict[str, Any]:
         return await self._request("GET", "/api/auth/status")
 

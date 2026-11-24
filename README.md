@@ -84,9 +84,13 @@ Download diagnostics from the device page to capture exactly what the marquee re
 1. Go to **Settings > Devices & Services > Add Integration**
 2. Search for **htMarquee**
 3. Enter your device's hostname or full URL (e.g. `htmarquee.local`, `https://10.0.1.50:8443`) and port (default: `443`)
-4. If authentication is enabled, enter your credentials on the next step
+4. If authentication is enabled, choose how Home Assistant signs in:
+   - **API token (recommended)** — needs htMarquee 1.6.0 or newer with a Premiere license. In the htMarquee web app open **Settings > Integrations > API Tokens**, create a token (for example "Home Assistant"), and paste it in. The token is shown only once.
+   - **Admin password or PIN** — works on every htMarquee version.
 
-The integration auto-detects whether your htMarquee instance requires authentication and supports both password and PIN auth modes. If you later change the device's password or PIN, Home Assistant prompts you to re-enter it rather than silently retrying a dead credential.
+With an API token, Home Assistant never stores your admin password, changing that password does not disconnect Home Assistant, and you can cut off Home Assistant alone by revoking its token on the device. A token has full control of htMarquee, so treat it like a password.
+
+The integration auto-detects whether your htMarquee instance requires authentication and supports both password and PIN auth modes. If the device later rejects the stored credential — the password or PIN was changed, or the API token was revoked or expired — Home Assistant prompts you for a new one rather than silently retrying a dead credential.
 
 ## Automation Examples
 
